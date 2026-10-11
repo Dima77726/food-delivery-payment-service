@@ -1,0 +1,96 @@
+spring:
+  application:
+    name: payment-service
+
+  lifecycle:
+    # Согласовано с stop_grace_period в docker-compose.yml.
+    timeout-per-shutdown-phase: 20s
+
+  datasource:
+    # Своя база платежей (database-per-service). Деньги — здесь и только здесь.
+    url: jdbc:postgresql://${PAYMENT_DB_HOST:localhost}:${PAYMENT_DB_PORT:5432}/${PAYMENT_DB_NAME:payments}
+    username: ${PAYMENT_DB_USER}
+    password: ${PAYMENT_DB_PASSWORD}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      minimum-idle: ${DB_POOL_SIZE:10}
+      connection-timeout: 3000
+      leak-detection-threshold: 20000
+
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      # Схемой владеет Liquibase. validate сверяет сущности с таблицами и падает при расхождении.
+      ddl-auto: validate
+    open-in-view: false
+
+  liquibase:
+    change-log: classpath:/db/changelog/changelog.yml
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9094}
+
+    producer:
+      # Потерянный исход платежа — это деньги, списанные за заказ, который об этом не узнал.
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+
+    consumer:
+      # Команды читает только сервис платежей.
+      group-id: ${KAFKA_CONSUMER_GROUP:payment-service}
+      auto-offset-reset: earliest
+      properties:
+        max.poll.records: 50
+
+    listener:
+      ack-mode: record
+
+app:
+  outbox:
+    publish-interval: ${OUTBOX_PUBLISH_INTERVAL:PT2S}
+    publish-enabled: ${OUTBOX_PUBLISH_ENABLED:true}
+
+  security:
+    jwt:
+      issuer: ${JWT_ISSUER:food-delivery-platform}
+      jwk-set-uri: ${JWT_JWK_SET_URI:http://localhost:8085/.well-known/jwks.json}
+
+management:
+  server:
+    port: ${MANAGEMENT_PORT:9087}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+    tags-sorter: alpha
+  api-docs:
+    path: /v3/api-docs
+
+server:
+  port: ${SERVER_PORT:8087}
+  shutdown: graceful
+
+logging:
+  pattern:
+    correlation: "[${spring.application.name:},%X{correlationId:-},%X{userId:-}] "
+  level:
+    root: INFO
+    com.dima.fooddelivery: DEBUG

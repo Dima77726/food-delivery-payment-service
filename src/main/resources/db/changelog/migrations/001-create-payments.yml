@@ -1,0 +1,9 @@
+databaseChangeLog:
+  - changeSet:
+      id: 001-create-payments
+      author: dima
+      changes:
+        - sqlFile:
+            path: sql/001-create-payments.sql
+            relativeToChangelogFile: true
+            splitStatements: true
