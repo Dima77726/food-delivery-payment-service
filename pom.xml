@@ -4,14 +4,25 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.dima</groupId>
-        <artifactId>food-delivery-platform</artifactId>
-        <version>0.0.1-SNAPSHOT</version>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.0.5</version>
+        <relativePath/>
     </parent>
 
+    <groupId>com.dima</groupId>
+    <version>0.0.1-SNAPSHOT</version>
     <artifactId>payment-service</artifactId>
     <name>payment-service</name>
     <description>Платежи: списания и возвраты по командам саги оплаты</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <!-- Ветка 3.x springdoc — единственная, совместимая со Spring Boot 4 / Framework 7. -->
+        <springdoc.version>3.1.0</springdoc.version>
+        <!-- Версия контрактов своя, отдельно от версии сервиса: см. food-delivery-contracts. -->
+        <contracts.version>1.0.0</contracts.version>
+    </properties>
 
     <!--
         Пятый вынесенный сервис — владелец денег. Синхронных вызовов у него нет ни в одну
@@ -21,6 +32,27 @@
 
         Наружу — только чтение платежей клиента по REST.
     -->
+
+    <!--
+        Контракты платформы — в GitHub Packages репозитория food-delivery-contracts. Читать оттуда
+        нужен токен даже для публичных пакетов: см. README контрактов (settings.xml с сервером github).
+    -->
+    <repositories>
+        <repository>
+            <id>github</id>
+            <url>https://maven.pkg.github.com/Dima77726/food-delivery-contracts</url>
+        </repository>
+    </repositories>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.dima</groupId>
+                <artifactId>event-contracts</artifactId>
+                <version>${contracts.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>
