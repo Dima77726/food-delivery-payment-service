@@ -2,6 +2,7 @@ package com.dima.fooddelivery.payment.service;
 
 import com.dima.fooddelivery.common.kafka.KafkaTopics;
 import com.dima.fooddelivery.support.AbstractIntegrationTest;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,6 +39,9 @@ class PaymentProviderReferenceIT extends AbstractIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private EntityManager entityManager;
 
     @BeforeEach
     void reset() {
@@ -104,13 +108,22 @@ class PaymentProviderReferenceIT extends AbstractIntegrationTest {
         );
     }
 
+    /**
+     * Сброс изменений в базу перед чтением через JDBC. Тест идёт в транзакции без коммита, а
+     * автоматический сброс Hibernate срабатывает только перед его собственными запросами:
+     * {@code JdbcTemplate} увидел бы ещё не записанную строку. В бою запись делает коммит.
+     */
     private String referenceOf(Long orderId) {
+        entityManager.flush();
+
         return jdbcTemplate.queryForObject(
                 "SELECT provider_reference FROM payment WHERE order_id = ?", String.class, orderId
         );
     }
 
     private String statusOf(Long orderId) {
+        entityManager.flush();
+
         return jdbcTemplate.queryForObject("SELECT status FROM payment WHERE order_id = ?", String.class, orderId);
     }
 
