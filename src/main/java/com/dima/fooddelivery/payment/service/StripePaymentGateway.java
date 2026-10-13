@@ -1,8 +1,10 @@
 package com.dima.fooddelivery.payment.service;
 
 import com.dima.fooddelivery.payment.domain.PaymentMethod;
+import io.micrometer.observation.ObservationRegistry;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.http.HttpHeaders;
@@ -62,7 +64,11 @@ public class StripePaymentGateway implements PaymentService.PaymentGateway {
     private final ObjectMapper objectMapper;
     private final RestClient client;
 
-    public StripePaymentGateway(StripeProperties properties, ObjectMapper objectMapper, RestClient.Builder builder) {
+    public StripePaymentGateway(
+            StripeProperties properties,
+            ObjectMapper objectMapper,
+            ObjectProvider<ObservationRegistry> observations
+    ) {
         this.properties = properties;
         this.objectMapper = objectMapper;
 
@@ -72,9 +78,13 @@ public class StripePaymentGateway implements PaymentService.PaymentGateway {
         JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
         requestFactory.setReadTimeout(properties.readTimeout());
 
-        this.client = builder
+        // Свой билдер, а не внедрённый: автонастроенного RestClient.Builder в сервисе нет (в Spring Boot 4
+        // он живёт в отдельном стартере). Наблюдаемость подключается вручную — вызовы Stripe видны в трассах
+        // и метриках; адрес запроса секретов не содержит (ключ едет в заголовке).
+        this.client = RestClient.builder()
                 .baseUrl(properties.baseUrl())
                 .requestFactory(requestFactory)
+                .observationRegistry(observations.getIfAvailable(() -> ObservationRegistry.NOOP))
                 .build();
     }
 
