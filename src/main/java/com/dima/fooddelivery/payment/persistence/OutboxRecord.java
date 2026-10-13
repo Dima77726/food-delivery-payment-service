@@ -22,6 +22,9 @@ public record OutboxRecord(
          * тела: тело — это контракт для потребителей, а метка относится к доставке
          * и в Kafka уходит заголовком, как и положено служебным данным.
          */
-        String correlationId
+        String correlationId,
+
+        /** Контекст трассы запроса (W3C traceparent) или null, если запрос не трассировался. */
+        String traceparent
 ) {
 }

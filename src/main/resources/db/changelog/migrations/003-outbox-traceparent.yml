@@ -1,0 +1,9 @@
+databaseChangeLog:
+  - changeSet:
+      id: 003-outbox-traceparent
+      author: dima
+      changes:
+        - sqlFile:
+            path: sql/003-outbox-traceparent.sql
+            relativeToChangelogFile: true
+            splitStatements: true

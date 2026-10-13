@@ -5,3 +5,6 @@ databaseChangeLog:
   - include:
       file: migrations/002-payment-provider-reference.yml
       relativeToChangelogFile: true
+  - include:
+      file: migrations/003-outbox-traceparent.yml
+      relativeToChangelogFile: true
