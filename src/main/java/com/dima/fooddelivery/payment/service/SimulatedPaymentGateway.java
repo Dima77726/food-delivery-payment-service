@@ -2,6 +2,7 @@ package com.dima.fooddelivery.payment.service;
 
 import com.dima.fooddelivery.payment.domain.PaymentMethod;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -14,18 +15,26 @@ import java.math.BigDecimal;
  * считается отклонённой банком. Это даёт детерминированный способ проверить ветку отказа
  * в интеграционных тестах, не подменяя бины.
  *
+ * <p>Включена по умолчанию; настоящий шлюз подключается настройкой {@code app.payments.gateway=stripe}
+ * (см. {@link StripePaymentGateway}). Платёж у провайдера заглушка не создаёт, поэтому ссылки
+ * на него не возвращает.
+ *
  * <p>Случайный отказ здесь был бы хуже: тесты стали бы «мигающими», а такие тесты команда
  * рано или поздно начинает игнорировать.
  */
 @Slf4j
 @Component
+@ConditionalOnProperty(name = "app.payments.gateway", havingValue = "simulated", matchIfMissing = true)
 public class SimulatedPaymentGateway implements PaymentService.PaymentGateway {
 
     private static final BigDecimal DECLINED_REMAINDER = new BigDecimal("0.13");
 
     @Override
-    public ChargeResult charge(BigDecimal amount, PaymentMethod method, Long orderId) {
-        if (method == PaymentMethod.CASH_ON_DELIVERY) {
+    public ChargeResult charge(ChargeRequest request) {
+        BigDecimal amount = request.amount();
+        Long orderId = request.orderId();
+
+        if (request.method() == PaymentMethod.CASH_ON_DELIVERY) {
             // Наличные при получении: списывать нечего, платёж считается принятым сразу.
             return ChargeResult.success();
         }
@@ -42,8 +51,8 @@ public class SimulatedPaymentGateway implements PaymentService.PaymentGateway {
     }
 
     @Override
-    public void refund(BigDecimal amount, Long orderId) {
-        log.info("Имитация возврата средств: orderId={}, amount={}", orderId, amount);
+    public void refund(RefundRequest request) {
+        log.info("Имитация возврата средств: orderId={}, amount={}", request.orderId(), request.amount());
     }
 
     private boolean isDeclinedAmount(BigDecimal amount) {

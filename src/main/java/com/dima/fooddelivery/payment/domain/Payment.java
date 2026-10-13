@@ -74,6 +74,14 @@ public class Payment {
     @Column(name = "failure_reason", length = 500)
     private String failureReason;
 
+    /**
+     * Платёж у внешнего провайдера (для Stripe — PaymentIntent). Нужен возврату: вернуть деньги
+     * можно только по нему. {@code null}, если провайдер платёж не видел — наличные при
+     * получении, заглушка шлюза, платежи до появления колонки.
+     */
+    @Column(name = "provider_reference", length = 100)
+    private String providerReference;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
@@ -99,6 +107,14 @@ public class Payment {
     public void moveTo(PaymentStatus next, String failureReason) {
         this.status = next;
         this.failureReason = failureReason;
+    }
+
+    /**
+     * Запоминает платёж у провайдера. Вызывается один раз — сразу после ответа шлюза, в той же
+     * транзакции, что и смена статуса: ссылка и статус «оплачено» не могут разойтись.
+     */
+    public void attachProviderReference(String providerReference) {
+        this.providerReference = providerReference;
     }
 
     @PrePersist
