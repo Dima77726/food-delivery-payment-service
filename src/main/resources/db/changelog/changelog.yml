@@ -2,3 +2,6 @@ databaseChangeLog:
   - include:
       file: migrations/001-create-payments.yml
       relativeToChangelogFile: true
+  - include:
+      file: migrations/002-payment-provider-reference.yml
+      relativeToChangelogFile: true

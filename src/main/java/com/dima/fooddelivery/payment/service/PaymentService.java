@@ -31,10 +31,13 @@ import java.util.List;
  * (Kafka доставляет «хотя бы один раз»). Уникальный ключ идемпотентности платежа защищает
  * от второй команды на ту же оплату — например, если сервис заказов отправил её дважды.
  *
- * <p><b>Обращение к шлюзу внутри транзакции</b> здесь допустимо, потому что шлюз — имитация.
- * С настоящим эквайрингом шаг разбивается на два: записать платёж в PENDING и закоммитить,
- * затем списать с ключом идемпотентности на стороне банка, затем записать исход. Тогда падение
- * между списанием и записью лечится повтором с тем же ключом — банк вернёт прежний результат.
+ * <p><b>Обращение к шлюзу внутри транзакции</b> — осознанный компромисс. Корректность держит не
+ * разбиение на транзакции, а ключ идемпотентности, который уходит провайдеру: если процесс
+ * упадёт между списанием и коммитом, команда придёт снова, и провайдер на тот же ключ вернёт
+ * прежний результат, а не спишет второй раз. Цена — соединение из пула занято на время
+ * HTTP-вызова; оно ограничено таймаутом шлюза. Разбить шаг на «записать PENDING и закоммитить →
+ * списать → записать исход» стоит, когда эта цена станет заметна: тогда понадобится ещё и
+ * уборщик платежей, застрявших в PENDING.
  */
 @Slf4j
 @Service
@@ -108,7 +111,12 @@ public class PaymentService {
         // Идентификатор нужен событию; стратегия IDENTITY проставила его при persist.
         paymentRepository.flush();
 
-        PaymentGateway.ChargeResult result = paymentGateway.charge(amount, method, command.orderId());
+        PaymentGateway.ChargeResult result = paymentGateway.charge(
+                new PaymentGateway.ChargeRequest(amount, method, command.orderId(), command.idempotencyKey())
+        );
+
+        // Ссылка запоминается и при отказе: по ней в кабинете провайдера находят неудачную попытку.
+        payment.attachProviderReference(result.providerReference());
 
         if (result.successful()) {
             payment.moveTo(PaymentStatus.SUCCEEDED, null);
@@ -139,7 +147,11 @@ public class PaymentService {
 
         Payment payment = succeeded.get();
 
-        paymentGateway.refund(payment.getAmount(), orderId);
+        // Ключ возврата выводится из ключа платежа: повторная команда на возврат того же платежа
+        // даёт провайдеру тот же ключ, и деньги возвращаются один раз.
+        paymentGateway.refund(new PaymentGateway.RefundRequest(
+                payment.getAmount(), orderId, payment.getProviderReference(), payment.getIdempotencyKey()
+        ));
 
         // Compare-and-set, а не грязная проверка: см. PaymentRepository#compareAndSetStatus.
         if (!paymentRepository.compareAndSetStatus(payment.getId(), PaymentStatus.SUCCEEDED, PaymentStatus.REFUNDED, null)) {
@@ -167,18 +179,47 @@ public class PaymentService {
      */
     public interface PaymentGateway {
 
-        ChargeResult charge(BigDecimal amount, PaymentMethod method, Long orderId);
+        /**
+         * Отказ банка — не исключение, а {@link ChargeResult#failure}. Исключение означает, что
+         * ответа нет (сеть, 5xx, неверный ключ): команда уйдёт на повтор и, не пройдя, в DLT.
+         */
+        ChargeResult charge(ChargeRequest request);
 
-        void refund(BigDecimal amount, Long orderId);
+        /**
+         * Возврат. Если провайдер платёж не видел ({@code providerReference == null}: наличные,
+         * заглушка, платёж до миграции), возвращать у него нечего.
+         */
+        void refund(RefundRequest request);
 
-        record ChargeResult(boolean successful, String failureReason) {
+        /**
+         * @param idempotencyKey ключ платежа; шлюз передаёт его провайдеру, чтобы повтор после
+         *                       сбоя не списал деньги второй раз
+         */
+        record ChargeRequest(BigDecimal amount, PaymentMethod method, Long orderId, String idempotencyKey) {
+        }
+
+        record RefundRequest(BigDecimal amount, Long orderId, String providerReference, String idempotencyKey) {
+        }
+
+        /**
+         * @param providerReference платёж у провайдера; {@code null}, если провайдер его не видел
+         */
+        record ChargeResult(boolean successful, String failureReason, String providerReference) {
 
             public static ChargeResult success() {
-                return new ChargeResult(true, null);
+                return new ChargeResult(true, null, null);
+            }
+
+            public static ChargeResult success(String providerReference) {
+                return new ChargeResult(true, null, providerReference);
             }
 
             public static ChargeResult failure(String reason) {
-                return new ChargeResult(false, reason);
+                return new ChargeResult(false, reason, null);
+            }
+
+            public static ChargeResult failure(String reason, String providerReference) {
+                return new ChargeResult(false, reason, providerReference);
             }
         }
     }

@@ -1,0 +1,9 @@
+databaseChangeLog:
+  - changeSet:
+      id: 002-payment-provider-reference
+      author: dima
+      changes:
+        - sqlFile:
+            path: sql/002-payment-provider-reference.sql
+            relativeToChangelogFile: true
+            splitStatements: true
