@@ -8,7 +8,8 @@ import com.dima.fooddelivery.payment.service.StripePaymentGateway.PaymentGateway
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.web.client.RestClient;
+import io.micrometer.observation.ObservationRegistry;
+import org.springframework.beans.factory.support.StaticListableBeanFactory;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -298,7 +299,9 @@ class StripePaymentGatewayTest {
                 Duration.ofSeconds(5)
         );
 
-        return new StripePaymentGateway(properties, objectMapper, RestClient.builder());
+        return new StripePaymentGateway(
+                properties, objectMapper, new StaticListableBeanFactory().getBeanProvider(ObservationRegistry.class)
+        );
     }
 
     private static Map<String, String> parseForm(String body) {
