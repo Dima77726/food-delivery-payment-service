@@ -1,6 +1,7 @@
 package com.dima.fooddelivery.payment.service;
 
 import com.dima.fooddelivery.payment.domain.PaymentMethod;
+import com.dima.fooddelivery.payment.fx.CurrencyConverter;
 import io.micrometer.observation.ObservationRegistry;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -63,14 +64,18 @@ public class StripePaymentGateway implements PaymentService.PaymentGateway {
     private final StripeProperties properties;
     private final ObjectMapper objectMapper;
     private final RestClient client;
+    private final CurrencyConverter converter;
 
     public StripePaymentGateway(
             StripeProperties properties,
             ObjectMapper objectMapper,
-            ObjectProvider<ObservationRegistry> observations
+            ObjectProvider<ObservationRegistry> observations,
+            ObjectProvider<CurrencyConverter> converters
     ) {
         this.properties = properties;
         this.objectMapper = objectMapper;
+        // Есть только при app.fx.enabled=true; иначе сумма уходит провайдеру как есть.
+        this.converter = converters.getIfAvailable();
 
         // Таймауты обязательны: без них зависший Stripe держит поток обработчика и соединение
         // с базой (вызов стоит внутри транзакции) сколько угодно.
@@ -115,8 +120,13 @@ public class StripePaymentGateway implements PaymentService.PaymentGateway {
             return ChargeResult.success();
         }
 
+        // Пересчёт в валюту провайдера (если включён) идёт до обращения к нему: нет курса — нет и платежа,
+        // исключение откатит транзакцию, а команда повторится.
+        CurrencyConverter.Conversion conversion = convert(request.amount());
+        BigDecimal providerAmount = conversion == null ? request.amount() : conversion.amount();
+
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
-        form.add("amount", String.valueOf(toMinorUnits(request.amount())));
+        form.add("amount", String.valueOf(toMinorUnits(providerAmount)));
         form.add("currency", properties.currency());
         form.add("payment_method", paymentMethodFor(request.amount()));
         form.add("confirm", "true");
@@ -126,6 +136,17 @@ public class StripePaymentGateway implements PaymentService.PaymentGateway {
         form.add("automatic_payment_methods[allow_redirects]", "never");
         form.add("description", "Заказ №" + request.orderId());
         form.add("metadata[order_id]", String.valueOf(request.orderId()));
+
+        if (conversion != null) {
+            // Исходная сумма и курс остаются у провайдера: по ним видно, откуда взялась сумма списания.
+            form.add("metadata[amount_rub]", request.amount().toPlainString());
+            form.add("metadata[rate_rub]", conversion.rate().toPlainString());
+            form.add("metadata[rate_date]", conversion.fetchedFrom().toString());
+
+            log.info("Сумма пересчитана по курсу ЦБ РФ: orderId={}, rub={}, {}={}, rate={}, date={}",
+                    request.orderId(), request.amount(), properties.currency(), providerAmount,
+                    conversion.rate(), conversion.fetchedFrom());
+        }
 
         Response response = post("/v1/payment_intents", form, "charge-" + request.idempotencyKey());
 
@@ -157,7 +178,13 @@ public class StripePaymentGateway implements PaymentService.PaymentGateway {
 
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("payment_intent", request.providerReference());
-        form.add("amount", String.valueOf(toMinorUnits(request.amount())));
+
+        // С пересчётом по курсу сумму возврата заново не считаем: курс за это время изменился бы, и возврат
+        // не совпал бы со списанием. Возврат без суммы — полный, а других этот сервис не делает.
+        if (!isConverting()) {
+            form.add("amount", String.valueOf(toMinorUnits(request.amount())));
+        }
+
         form.add("metadata[order_id]", String.valueOf(request.orderId()));
 
         Response response = post("/v1/refunds", form, "refund-" + request.idempotencyKey());
@@ -176,6 +203,14 @@ public class StripePaymentGateway implements PaymentService.PaymentGateway {
         }
 
         throw unexpected("возврат", response);
+    }
+
+    private boolean isConverting() {
+        return converter != null && !"rub".equalsIgnoreCase(properties.currency());
+    }
+
+    private CurrencyConverter.Conversion convert(BigDecimal roubles) {
+        return isConverting() ? converter.fromRoubles(roubles, properties.currency()) : null;
     }
 
     private ChargeResult interpretPaymentIntent(JsonNode intent, Long orderId) {
