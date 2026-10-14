@@ -62,9 +62,15 @@ app:
       # sk_test_… — тестовый режим. Значения по умолчанию нет: ключ не должен лежать в репозитории.
       api-key: ${STRIPE_API_KEY:}
       base-url: ${STRIPE_BASE_URL:https://api.stripe.com}
-      # Stripe не принимает рубли на новых аккаунтах; сумма заказа уходит как есть, без курса.
+      # Stripe не принимает рубли на новых аккаунтах: сумма заказа (рубли) уходит как есть, если не включён
+      # пересчёт по курсу ЦБ РФ (app.fx.enabled).
       currency: ${STRIPE_CURRENCY:usd}
       payment-method: ${STRIPE_PAYMENT_METHOD:pm_card_visa}
+
+  # Пересчёт суммы заказа в валюту провайдера по курсу ЦБ РФ (SOAP DailyInfo). Выключен по умолчанию.
+  fx:
+    enabled: ${FX_ENABLED:false}
+    cbr-url: ${FX_CBR_URL:https://www.cbr.ru/DailyInfoWebServ/DailyInfo.asmx}
 
   outbox:
     publish-interval: ${OUTBOX_PUBLISH_INTERVAL:PT2S}

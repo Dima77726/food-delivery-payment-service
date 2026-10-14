@@ -1,6 +1,8 @@
 package com.dima.fooddelivery.payment.service;
 
 import com.dima.fooddelivery.payment.domain.PaymentMethod;
+import com.dima.fooddelivery.payment.fx.CurrencyConverter;
+import com.dima.fooddelivery.payment.fx.RatesUnavailableException;
 import com.dima.fooddelivery.payment.service.PaymentService.PaymentGateway.ChargeRequest;
 import com.dima.fooddelivery.payment.service.PaymentService.PaymentGateway.ChargeResult;
 import com.dima.fooddelivery.payment.service.PaymentService.PaymentGateway.RefundRequest;
@@ -19,6 +21,7 @@ import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -211,6 +214,72 @@ class StripePaymentGatewayTest {
         );
     }
 
+    /** Пересчёт по курсу: провайдеру уходит сумма в его валюте, а исходная и курс — в метаданных платежа. */
+    @Test
+    void shouldChargeConvertedAmountAndKeepRateInMetadata() throws Exception {
+        CurrencyConverter converter = (roubles, currency) -> new CurrencyConverter.Conversion(
+                new BigDecimal("10.74"), new BigDecimal("83.8675"), LocalDate.of(2026, 10, 14));
+        StripePaymentGateway gateway = gateway(TEST_KEY, converter);
+        replies.add(new Reply(200, """
+                {"id":"pi_fx","status":"succeeded"}"""));
+
+        ChargeResult result = gateway.charge(charge("900.20", 48L, "key-fx"));
+
+        Recorded sent = requests.peek();
+        assertAll(
+                () -> assertTrue(result.successful()),
+                () -> assertEquals("1074", sent.form().get("amount"), "10.74 USD в центах, а не 900.20"),
+                () -> assertEquals("usd", sent.form().get("currency")),
+                () -> assertEquals("900.20", sent.form().get("metadata[amount_rub]")),
+                () -> assertEquals("83.8675", sent.form().get("metadata[rate_rub]")),
+                () -> assertEquals("2026-10-14", sent.form().get("metadata[rate_date]"))
+        );
+    }
+
+    /** Нет курса — нет и платежа: исключение, а не отказ клиенту; провайдера при этом не трогаем. */
+    @Test
+    void shouldNotCallStripeAndThrowWhenRateIsUnavailable() throws Exception {
+        CurrencyConverter converter = (roubles, currency) -> {
+            throw new RatesUnavailableException("ЦБ недоступен");
+        };
+        StripePaymentGateway gateway = gateway(TEST_KEY, converter);
+
+        assertThrows(RatesUnavailableException.class, () -> gateway.charge(charge("900.20", 48L, "key-fx")));
+        assertTrue(requests.isEmpty(), "без курса Stripe вызываться не должен");
+    }
+
+    /** Возврат без суммы — полный: пересчитывать её по сегодняшнему курсу нельзя, она разойдётся со списанием. */
+    @Test
+    void shouldRefundInFullWithoutAmountWhenConverting() throws Exception {
+        CurrencyConverter converter = (roubles, currency) -> new CurrencyConverter.Conversion(
+                new BigDecimal("10.74"), new BigDecimal("83.8675"), LocalDate.of(2026, 10, 14));
+        StripePaymentGateway gateway = gateway(TEST_KEY, converter);
+        replies.add(new Reply(200, """
+                {"id":"re_1","status":"succeeded"}"""));
+
+        gateway.refund(new RefundRequest(new BigDecimal("900.20"), 48L, "pi_123", "key-1"));
+
+        Recorded sent = requests.peek();
+        assertAll(
+                () -> assertEquals("pi_123", sent.form().get("payment_intent")),
+                () -> assertFalse(sent.form().containsKey("amount"))
+        );
+    }
+
+    @Test
+    void shouldNotConvertNorTouchRefundAmountWhenConverterIsAbsent() throws Exception {
+        StripePaymentGateway gateway = gateway(TEST_KEY);
+        replies.add(new Reply(200, """
+                {"id":"pi_1","status":"succeeded"}"""));
+
+        gateway.charge(charge("900.20", 48L, "key-1"));
+
+        assertAll(
+                () -> assertEquals("90020", requests.peek().form().get("amount")),
+                () -> assertFalse(requests.peek().form().containsKey("metadata[rate_rub]"))
+        );
+    }
+
     @Test
     void shouldDoNothingOnRefundWithoutProviderReference() throws Exception {
         StripePaymentGateway gateway = gateway(TEST_KEY);
@@ -262,6 +331,10 @@ class StripePaymentGatewayTest {
     }
 
     private StripePaymentGateway gateway(String apiKey) throws IOException {
+        return gateway(apiKey, null);
+    }
+
+    private StripePaymentGateway gateway(String apiKey, CurrencyConverter converter) throws IOException {
         server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
         server.createContext("/", exchange -> {
             byte[] body = exchange.getRequestBody().readAllBytes();
@@ -299,8 +372,16 @@ class StripePaymentGatewayTest {
                 Duration.ofSeconds(5)
         );
 
+        StaticListableBeanFactory beans = new StaticListableBeanFactory();
+        if (converter != null) {
+            beans.addBean("currencyConverter", converter);
+        }
+
         return new StripePaymentGateway(
-                properties, objectMapper, new StaticListableBeanFactory().getBeanProvider(ObservationRegistry.class)
+                properties,
+                objectMapper,
+                beans.getBeanProvider(ObservationRegistry.class),
+                beans.getBeanProvider(CurrencyConverter.class)
         );
     }
 
