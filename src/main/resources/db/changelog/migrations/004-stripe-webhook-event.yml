@@ -1,0 +1,9 @@
+databaseChangeLog:
+  - changeSet:
+      id: 004-stripe-webhook-event
+      author: dima
+      changes:
+        - sqlFile:
+            path: sql/004-stripe-webhook-event.sql
+            relativeToChangelogFile: true
+            splitStatements: true
