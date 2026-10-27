@@ -29,6 +29,11 @@ public class PaymentEventWriter {
     private final ObjectMapper objectMapper;
 
     public void append(String eventType, Payment payment) {
+        append(eventType, payment, payment.getAmount());
+    }
+
+    /** Исход с суммой, отличной от суммы платежа, — частичный возврат. */
+    public void append(String eventType, Payment payment, java.math.BigDecimal amount) {
         UUID eventId = UUID.randomUUID();
 
         PaymentEvent event = new PaymentEvent(
@@ -38,7 +43,7 @@ public class PaymentEventWriter {
                 payment.getOrderId(),
                 payment.getId(),
                 payment.getCustomerId(),
-                payment.getAmount(),
+                amount,
                 payment.getMethod().name(),
                 payment.getFailureReason(),
                 OffsetDateTime.now()

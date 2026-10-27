@@ -49,6 +49,9 @@ public class PaymentService {
     private final PaymentEventWriter paymentEvents;
     private final InboxRepository inbox;
     private final PaymentMetrics metrics;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
+
+    static final String PARTIAL_REFUND_PREFIX = "partial-refund:";
 
     /**
      * Команда из Kafka. Отметка в inbox, работа и исход в outbox — одна транзакция:
@@ -63,7 +66,13 @@ public class PaymentService {
 
         switch (command.commandType()) {
             case PaymentCommand.PAYMENT_REQUESTED -> charge(command);
-            case PaymentCommand.REFUND_REQUESTED -> refund(command.orderId());
+            case PaymentCommand.REFUND_REQUESTED -> {
+                if (command.idempotencyKey() != null && command.idempotencyKey().startsWith(PARTIAL_REFUND_PREFIX)) {
+                    partialRefund(command);
+                } else {
+                    refund(command.orderId());
+                }
+            }
             default -> log.warn("Неизвестная команда, пропускаем: commandType={}, orderId={}",
                     command.commandType(), command.orderId());
         }
@@ -163,6 +172,40 @@ public class PaymentService {
         paymentEvents.append(PaymentEvent.PAYMENT_REFUNDED, payment);
 
         log.info("Оформлен возврат: orderId={}, paymentId={}, amount={}", orderId, payment.getId(), payment.getAmount());
+    }
+
+    /**
+     * Частичный возврат по заявке клиента («не привезли напиток»). Отличается от полного ключом
+     * идемпотентности заявки ({@code partial-refund:<uuid>}): по нему провайдер не вернёт одну заявку
+     * дважды, а сумма копится в {@code refunded_amount}. Нельзя вернуть больше списанного — проверка
+     * внутри UPDATE. Вернули всё — платёж становится REFUNDED.
+     */
+    private void partialRefund(PaymentCommand command) {
+        var succeeded = paymentRepository.findSucceededByOrderId(command.orderId());
+        if (succeeded.isEmpty()) {
+            log.warn("Частичный возврат без успешного платежа: orderId={}", command.orderId());
+            return;
+        }
+        Payment payment = succeeded.get();
+        java.math.BigDecimal amount = command.amount();
+
+        if (jdbc.update("""
+                UPDATE payment SET refunded_amount = refunded_amount + ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND refunded_amount + ? <= amount
+                """, amount, payment.getId(), amount) == 0) {
+            log.warn("Частичный возврат больше остатка платежа отклонён: paymentId={}, amount={}", payment.getId(), amount);
+            return;
+        }
+
+        paymentGateway.refund(new PaymentGateway.RefundRequest(amount, command.orderId(), payment.getProviderReference(), command.idempotencyKey()));
+
+        java.math.BigDecimal refunded = jdbc.queryForObject("SELECT refunded_amount FROM payment WHERE id = ?", java.math.BigDecimal.class, payment.getId());
+        if (refunded.compareTo(payment.getAmount()) >= 0) {
+            paymentRepository.compareAndSetStatus(payment.getId(), PaymentStatus.SUCCEEDED, PaymentStatus.REFUNDED, null);
+        }
+        metrics.paymentRefunded(payment.getMethod().name());
+        paymentEvents.append(PaymentEvent.PAYMENT_REFUNDED, payment, amount);
+        log.info("Частичный возврат: orderId={}, paymentId={}, amount={}, всего возвращено={}", command.orderId(), payment.getId(), amount, refunded);
     }
 
     private static String outcomeOf(Payment payment) {

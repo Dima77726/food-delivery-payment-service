@@ -11,3 +11,6 @@ databaseChangeLog:
   - include:
       file: migrations/004-stripe-webhook-event.yml
       relativeToChangelogFile: true
+  - include:
+      file: migrations/005-partial-refund.yml
+      relativeToChangelogFile: true

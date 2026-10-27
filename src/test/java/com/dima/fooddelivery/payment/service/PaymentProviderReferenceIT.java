@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Ссылка на платёж у провайдера: сохраняется вместе с платежом и доезжает до возврата.
@@ -90,6 +91,33 @@ class PaymentProviderReferenceIT extends AbstractIntegrationTest {
                 () -> assertEquals(charge.idempotencyKey(), gateway.refunds.get(0).idempotencyKey()),
                 () -> assertEquals("REFUNDED", statusOf(orderId))
         );
+    }
+
+    /** Частичные возвраты копятся, больше списанного не вернуть, а вернули всё — платёж REFUNDED. */
+    @Test
+    void shouldRefundPartiallyUpToChargedAmount() {
+        Long orderId = ORDER_IDS.incrementAndGet();
+        gateway.nextCharge = PaymentService.PaymentGateway.ChargeResult.success("pi_it_partial");
+        paymentService.handle(PaymentServiceIT.paymentRequested(orderId, 77L, "450.00"), KafkaTopics.PAYMENT_COMMANDS);
+
+        paymentService.handle(partialRefund(orderId, "150.00"), KafkaTopics.PAYMENT_COMMANDS);
+        assertEquals("SUCCEEDED", statusOf(orderId));
+        paymentService.handle(partialRefund(orderId, "400.00"), KafkaTopics.PAYMENT_COMMANDS);   // больше остатка
+        paymentService.handle(partialRefund(orderId, "300.00"), KafkaTopics.PAYMENT_COMMANDS);
+
+        assertAll(
+                () -> assertEquals(2, gateway.refunds.size(), "возврат сверх остатка не должен дойти до провайдера"),
+                () -> assertEquals(new java.math.BigDecimal("150.00"), gateway.refunds.get(0).amount()),
+                () -> assertTrue(gateway.refunds.get(0).idempotencyKey().startsWith("partial-refund:")),
+                () -> assertEquals("REFUNDED", statusOf(orderId))
+        );
+    }
+
+    private static com.dima.fooddelivery.contracts.payment.PaymentCommand partialRefund(Long orderId, String amount) {
+        return new com.dima.fooddelivery.contracts.payment.PaymentCommand(java.util.UUID.randomUUID(),
+                com.dima.fooddelivery.contracts.payment.PaymentCommand.CURRENT_SCHEMA_VERSION,
+                com.dima.fooddelivery.contracts.payment.PaymentCommand.REFUND_REQUESTED, orderId, 77L,
+                new java.math.BigDecimal(amount), null, "partial-refund:" + java.util.UUID.randomUUID(), java.time.OffsetDateTime.now());
     }
 
     /** Платёж, которого провайдер не видел (наличные, заглушка, до миграции), возвращается без ссылки. */

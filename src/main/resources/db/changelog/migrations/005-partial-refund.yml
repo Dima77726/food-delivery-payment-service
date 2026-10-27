@@ -1,0 +1,9 @@
+databaseChangeLog:
+  - changeSet:
+      id: 005-partial-refund
+      author: dima
+      changes:
+        - sqlFile:
+            path: sql/005-partial-refund.sql
+            relativeToChangelogFile: true
+            splitStatements: true
