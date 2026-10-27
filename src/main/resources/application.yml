@@ -66,6 +66,11 @@ app:
       # пересчёт по курсу ЦБ РФ (app.fx.enabled).
       currency: ${STRIPE_CURRENCY:usd}
       payment-method: ${STRIPE_PAYMENT_METHOD:pm_card_visa}
+      # Входящие вебхуки Stripe (POST /api/v1/webhooks/stripe): секрет конечной точки whsec_… из кабинета
+      # или из `stripe listen`. Пусто — приём выключен (503). Работают и при симулированном шлюзе.
+      webhook-secret: ${STRIPE_WEBHOOK_SECRET:}
+      # Окно времени подписи: запрос старше отвергается — защита от повторной отправки перехваченного.
+      webhook-tolerance: ${STRIPE_WEBHOOK_TOLERANCE:PT5M}
 
   # Пересчёт суммы заказа в валюту провайдера по курсу ЦБ РФ (SOAP DailyInfo). Выключен по умолчанию.
   fx:

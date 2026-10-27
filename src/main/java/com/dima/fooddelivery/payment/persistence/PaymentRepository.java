@@ -98,6 +98,15 @@ public class PaymentRepository {
         return search(PaymentSearch.byCustomer(customerId));
     }
 
+    /** Платёж по номеру у провайдера (pi_… у Stripe) — для входящих вебхуков. */
+    public Optional<Payment> findByProviderReference(String providerReference) {
+        return entityManager.createQuery("SELECT p FROM Payment p WHERE p.providerReference = :reference", Payment.class)
+                .setParameter("reference", providerReference)
+                .setMaxResults(1)
+                .getResultStream()
+                .findFirst();
+    }
+
     public Payment save(Payment payment) {
         entityManager.persist(payment);
 

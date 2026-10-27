@@ -84,6 +84,9 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.GET, PUBLIC_GET_PATHS).permitAll()
+                        // Входящий вебхук Stripe: токена у провайдера нет, подлинность доказывает подпись
+                        // Stripe-Signature, её проверяет контроллер.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/webhooks/stripe").permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole(ADMIN_ROLE)
                         .anyRequest().authenticated()
                 )
